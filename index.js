@@ -521,11 +521,9 @@ function showConfigForm() {
     style: { bg: "green", fg: "black", focus: { bg: "yellow" } }
   });
 
-  // isi nilai awal
   bridgeInput.setValue(String(dailyActivityConfig.bridgeRepetitions));
   swapInput.setValue(String(dailyActivityConfig.swapRepetitions));
 
-  // event tombol save
   saveButton.on("press", () => {
     const bridge = Number(bridgeInput.getValue()) || 1;
     const swap = Number(swapInput.getValue()) || 1;
@@ -534,12 +532,14 @@ function showConfigForm() {
     saveConfig();
     addLog(`Config updated: bridge=${bridge}, swap=${swap}`, "success");
     form.destroy();
+    menu.focus();          // ✅ fix: kembalikan fokus ke menu
     screen.render();
   });
 
   // tombol esc / q untuk keluar tanpa simpan
   form.key(["escape", "q"], () => {
     form.destroy();
+    menu.focus();          // ✅ fix juga di sini
     screen.render();
   });
 
