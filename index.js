@@ -238,4 +238,305 @@ async function performSwapSimple(pk, proxyUrl, accountIndex) {
     const amountInWei = ethers.parseUnits(amountIn.toString(), 18);
 
     // NOTE: many swap routers differ; this is a template using exactInputSingle tuple.
-    const deadline = Math.floor(Date.now() / 1000) + 180
+    const deadline = Math.floor(Date.now() / 1000) + 1800;
+    const params = {
+      tokenIn: TOKEN_B,
+      tokenOut: TOKEN_B,
+      deployer: "0x0000000000000000000000000000000000000000",
+      recipient: signer.address,
+      deadline,
+      amountIn: amountInWei,
+      amountOutMinimum: 0,
+      limitSqrtPrice: 0
+    };
+
+    const iface = new ethers.Interface(SWAP_ROUTER_ABI);
+    const encoded = iface.encodeFunctionData("exactInputSingle", [params]);
+
+    addLog(`Acct ${accountIndex+1}: swapping ${amountIn} (template)`, "info");
+    const nonce = await providerB.getTransactionCount(signer.address, "pending");
+    const feeData = await providerB.getFeeData();
+    const tx = await swapRouter.multicall([encoded], {
+      value: 0,
+      gasLimit: 500000,
+      maxFeePerGas: feeData.maxFeePerGas,
+      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+      nonce
+    });
+    addLog(`Acct ${accountIndex+1}: swap tx ${shortHash(tx.hash)} sent`, "wait");
+    await tx.wait();
+    addLog(`Acct ${accountIndex+1}: swap completed`, "success");
+    return true;
+  } catch (e) {
+    addLog(`Acct ${accountIndex+1}: swap error: ${e.message}`, "error");
+    return false;
+  }
+}
+
+/* ===== Runner ===== */
+
+async function runDailyActivityLoop() {
+  if (privateKeys.length === 0) {
+    addLog("No private keys loaded. Add keys to pk.txt", "error");
+    return;
+  }
+  if (activityRunning) { addLog("Activity already running", "warn"); return; }
+  activityRunning = true;
+  shouldStop = false;
+  addLog("Starting activity loop", "success");
+
+  try {
+    for (let i = 0; i < privateKeys.length && !shouldStop; i++) {
+      addLog(`Processing account ${i+1}/${privateKeys.length}`, "info");
+      const pk = privateKeys[i];
+      const proxyUrl = proxies[i % Math.max(1, proxies.length)] || null;
+
+      // Bridges
+      for (let b = 0; b < (dailyActivityConfig.bridgeRepetitions || 1) && !shouldStop; b++) {
+        await performBridgeSimple(pk, proxyUrl, i);
+        if (b < (dailyActivityConfig.bridgeRepetitions - 1)) await sleepRandom(8000, 20000);
+      }
+
+      await sleepRandom(7000, 15000);
+
+      // Swaps
+      for (let s = 0; s < (dailyActivityConfig.swapRepetitions || 1) && !shouldStop; s++) {
+        await performSwapSimple(pk, proxyUrl, i);
+        if (s < (dailyActivityConfig.swapRepetitions - 1)) await sleepRandom(8000, 20000);
+      }
+
+      if (i < privateKeys.length - 1) {
+        addLog("Waiting 30s before next account...", "wait");
+        await sleep(30_000);
+      }
+    }
+    addLog("Activity loop finished for all accounts", "success");
+  } catch (e) {
+    addLog(`Runner unexpected error: ${e.message}`, "error");
+  } finally {
+    activityRunning = false;
+    shouldStop = false;
+  }
+}
+
+function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
+function sleepRandom(minMs, maxMs) {
+  const ms = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+  return sleep(ms);
+}
+
+/* ===== UI (neo-blessed) ===== */
+
+const screen = blessed.screen({
+  smartCSR: true,
+  title: "UNIVERSAL TESTNET BOT (Mouse)",
+  fullUnicode: true,
+  autoPadding: true
+});
+
+const header = blessed.box({
+  top: 0, left: "center", width: "100%", height: 5,
+  tags: true,
+  content: figlet.textSync("UNIVERSAL BOT", { horizontalLayout: "default" }),
+  style: { fg: "yellow" }
+});
+
+const status = blessed.box({
+  top: 5, left: 0, width: "100%", height: 3, border: { type: "line" },
+  label: chalk.cyan(" Status "), padding: { left: 1 },
+  content: "Status: Idle"
+});
+
+const walletBox = blessed.list({
+  label: " Wallets ",
+  top: 9, left: 0, width: "40%", height: "60%",
+  border: { type: "line" },
+  style: {
+    border: { fg: "cyan" },
+    selected: { bg: "magenta", fg: "white" },
+    item: { fg: "white" }
+  },
+  scrollable: true,
+  keys: true,
+  vi: true,
+  mouse: true,
+  items: ["No wallets loaded"]
+});
+
+const logBox = blessed.log({
+  label: " Logs ",
+  top: 9, left: "41%", width: "59%", height: "80%",
+  border: { type: "line" }, tags: true,
+  scrollbar: { ch: "│" },
+  style: { border: { fg: "magenta" } },
+  mouse: true
+});
+
+const hintBar = blessed.box({
+  bottom: 0, left: "center", width: "100%", height: 1, align: "center",
+  content: "↑↓ = Navigate | Enter / Click = Select | Ctrl+C = Exit",
+  style: { fg: "grey" }
+});
+
+const menu = blessed.list({
+  label: " Menu ",
+  top: "70%", left: 0, width: "40%", height: "30%",
+  border: { type: "line" },
+  keys: true, vi: true, mouse: true, interactive: true,
+  style: {
+    selected: { bg: "green", fg: "black" },
+    item: { hover: { bg: "blue" } },
+    border: { fg: "red" }
+  },
+  items: ["Start Activity", "Stop Activity", "Set Config", "Clear Logs", "Refresh Wallets", "Exit"]
+});
+
+screen.append(header);
+screen.append(status);
+screen.append(walletBox);
+screen.append(logBox);
+screen.append(menu);
+screen.append(hintBar);
+
+/* Utility to refresh wallet list display */
+async function refreshWalletList() {
+  const items = [];
+  for (let i = 0; i < privateKeys.length; i++) {
+    try {
+      const pk = privateKeys[i];
+      const providerA = getProvider(RPC_A, CHAIN_ID_A);
+      const wallet = new ethers.Wallet(pk, providerA);
+      const bal = await providerA.getBalance(wallet.address).catch(() => 0n);
+      const formatted = Number(ethers.formatUnits(bal, 18)).toFixed(4);
+      items.push(`${i+1}. ${wallet.address} - ${formatted}`);
+    } catch (e) {
+      items.push(`${i+1}. ERROR - ${e.message}`);
+    }
+  }
+  walletBox.setItems(items.length ? items : ["No wallets loaded"]);
+  screen.render();
+}
+
+/* Logs update */
+function updateLogs() {
+  logBox.setContent(transactionLogs.join("\n"));
+  screen.render();
+}
+
+/* Status update */
+function updateStatus(txt) {
+  status.setContent(`Status: ${txt}`);
+  screen.render();
+}
+
+/* Menu action handler (used by both click and keyboard select) */
+async function handleMenuAction(label) {
+  if (label.includes("Start")) {
+    if (activityRunning) addLog("Activity already running", "warn");
+    else {
+      updateStatus("Starting...");
+      runDailyActivityLoop().catch(e => addLog(`Runner crashed: ${e.message}`, "error"));
+    }
+  } else if (label.includes("Stop")) {
+    if (!activityRunning) addLog("Activity not running", "info");
+    else {
+      shouldStop = true;
+      updateStatus("Stopping...");
+      addLog("Stop requested. Waiting for current operations to finish...", "wait");
+    }
+  } else if (label.includes("Set Config")) {
+    showConfigForm();
+  } else if (label.includes("Clear Logs")) {
+    transactionLogs = [];
+    updateLogs();
+    addLog("Logs cleared", "success");
+  } else if (label.includes("Refresh Wallets")) {
+    loadPrivateKeys();
+    loadProxies();
+    await refreshWalletList();
+    addLog("Refreshed environment", "success");
+  } else if (label.includes("Exit")) {
+    addLog("Exiting...", "info");
+    process.exit(0);
+  } else {
+    addLog(`Unknown menu action: ${label}`, "error");
+  }
+}
+
+/* Bind keyboard selection */
+menu.on("select", (item, idx) => {
+  const label = item.getText();
+  handleMenuAction(label);
+});
+
+/* Bind click - map click to item selected */
+menu.on("click", (data) => {
+  // neo-blessed gives data.y to calculate which item clicked; fallback to selected index
+  try {
+    const idx = menu.getItemIndex(menu.getItem(menu.selected));
+    const label = menu.items[idx].getText();
+    handleMenuAction(label);
+  } catch {
+    const label = menu.getItem(menu.selected).getText();
+    handleMenuAction(label);
+  }
+});
+
+/* Also allow clicking on log lines to copy index (optional) */
+logBox.on("click", () => {
+  // focus menu for convenience
+  menu.focus();
+});
+
+/* Config form */
+function showConfigForm() {
+  const form = blessed.form({
+    parent: screen,
+    left: "center", top: "center", width: "50%", height: 12, keys: true, mouse: true, border: { type: "line" }, label: " Set Config "
+  });
+  const bridgeInput = blessed.textbox({ parent: form, name: "bridge", top: 2, left: 2, height: 3, width: "90%", label: "Bridge repetitions", inputOnFocus: true });
+  const swapInput = blessed.textbox({ parent: form, name: "swap", top: 6, left: 2, height: 3, width: "90%", label: "Swap repetitions", inputOnFocus: true });
+  const submit = blessed.button({ parent: form, bottom: 1, left: "center", content: "Save", shrink: true, mouse: true, keys: true });
+  bridgeInput.setValue(String(dailyActivityConfig.bridgeRepetitions));
+  swapInput.setValue(String(dailyActivityConfig.swapRepetitions));
+  submit.on("press", () => form.submit());
+  form.on("submit", (data) => {
+    dailyActivityConfig.bridgeRepetitions = Number(data.bridge) || 1;
+    dailyActivityConfig.swapRepetitions = Number(data.swap) || 1;
+    saveConfig();
+    addLog("Config updated", "success");
+    form.destroy();
+    screen.render();
+  });
+  form.on("cancel", () => { form.destroy(); screen.render(); });
+  bridgeInput.focus();
+  screen.render();
+}
+
+/* Key bindings */
+screen.key(["C-c"], () => process.exit(0));
+screen.key(["tab"], () => {
+  // cycle focus
+  if (screen.focused === menu) walletBox.focus();
+  else if (screen.focused === walletBox) logBox.focus();
+  else menu.focus();
+});
+
+/* ===== Startup ===== */
+
+async function bootstrap() {
+  addLog("Booting universal_testnet_bot (mouse-enabled)...", "info");
+  loadPrivateKeys();
+  loadProxies();
+  loadConfig();
+  await refreshWalletList();
+  updateLogs();
+  updateStatus("Idle");
+  menu.focus();
+  screen.render();
+}
+
+bootstrap().catch(e => addLog(`Bootstrap failed: ${e.message}`, "error"));
+
+/* expose for debugging if needed */
+export default {};
