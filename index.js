@@ -15,7 +15,7 @@
  * Customize RPC / CHAIN / CONTRACT constants below.
  */
 
-import blessed from "blessed";
+import blessed from "neo-blessed"; // <— pakai neo-blessed, bukan blessed
 import chalk from "chalk";
 import figlet from "figlet";
 import { ethers } from "ethers";
@@ -361,10 +361,27 @@ const logBox = blessed.log({
   label: " Logs ", top: 9, left: "41%", width: "59%", height: "80%", border: { type: "line" }, tags: true, scrollbar: { ch: "│" }, scrollable: true
 });
 const menu = blessed.list({
-  label: " Menu ", top: "70%", left: 0, width: "40%", height: "30%", border: { type: "line" }, keys: true, vi: true, mouse: true,
+  label: " Menu ",
+  top: "70%",
+  left: 0,
+  width: "40%",
+  height: "30%",
+  border: { type: "line" },
+  keys: true,
+  mouse: true,
+  interactive: true,
+  style: {
+    selected: { bg: "green", fg: "black" },
+    item: { hover: { bg: "blue" } }
+  },
   items: ["Start Activity", "Stop Activity", "Set Config", "Clear Logs", "Refresh", "Exit"]
 });
 
+// aktifkan event klik
+menu.on('click', function (_, index) {
+  const selected = menu.getItem(index).content;
+  handleMenu(selected);
+});
 screen.append(header);
 screen.append(statusBox);
 screen.append(walletBox);
