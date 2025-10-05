@@ -492,23 +492,57 @@ logBox.on("click", () => {
 function showConfigForm() {
   const form = blessed.form({
     parent: screen,
-    left: "center", top: "center", width: "50%", height: 12, keys: true, mouse: true, border: { type: "line" }, label: " Set Config "
+    left: "center", top: "center",
+    width: "50%", height: 12,
+    keys: true, mouse: true,
+    border: { type: "line" },
+    label: " Set Config "
   });
-  const bridgeInput = blessed.textbox({ parent: form, name: "bridge", top: 2, left: 2, height: 3, width: "90%", label: "Bridge repetitions", inputOnFocus: true });
-  const swapInput = blessed.textbox({ parent: form, name: "swap", top: 6, left: 2, height: 3, width: "90%", label: "Swap repetitions", inputOnFocus: true });
-  const submit = blessed.button({ parent: form, bottom: 1, left: "center", content: "Save", shrink: true, mouse: true, keys: true });
+
+  const bridgeInput = blessed.textbox({
+    parent: form, name: "bridge",
+    top: 2, left: 2, height: 3, width: "90%",
+    label: "Bridge repetitions",
+    inputOnFocus: true
+  });
+
+  const swapInput = blessed.textbox({
+    parent: form, name: "swap",
+    top: 6, left: 2, height: 3, width: "90%",
+    label: "Swap repetitions",
+    inputOnFocus: true
+  });
+
+  const saveButton = blessed.button({
+    parent: form,
+    bottom: 1, left: "center",
+    content: " Save ",
+    shrink: true, mouse: true, keys: true,
+    style: { bg: "green", fg: "black", focus: { bg: "yellow" } }
+  });
+
+  // isi nilai awal
   bridgeInput.setValue(String(dailyActivityConfig.bridgeRepetitions));
   swapInput.setValue(String(dailyActivityConfig.swapRepetitions));
-  submit.on("press", () => form.submit());
-  form.on("submit", (data) => {
-    dailyActivityConfig.bridgeRepetitions = Number(data.bridge) || 1;
-    dailyActivityConfig.swapRepetitions = Number(data.swap) || 1;
+
+  // event tombol save
+  saveButton.on("press", () => {
+    const bridge = Number(bridgeInput.getValue()) || 1;
+    const swap = Number(swapInput.getValue()) || 1;
+    dailyActivityConfig.bridgeRepetitions = bridge;
+    dailyActivityConfig.swapRepetitions = swap;
     saveConfig();
-    addLog("Config updated", "success");
+    addLog(`Config updated: bridge=${bridge}, swap=${swap}`, "success");
     form.destroy();
     screen.render();
   });
-  form.on("cancel", () => { form.destroy(); screen.render(); });
+
+  // tombol esc / q untuk keluar tanpa simpan
+  form.key(["escape", "q"], () => {
+    form.destroy();
+    screen.render();
+  });
+
   bridgeInput.focus();
   screen.render();
 }
